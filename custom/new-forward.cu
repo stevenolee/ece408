@@ -6,6 +6,8 @@ __host__ __device__ size_t ceilDiv(size_t x, size_t y) {
   return 1 + ((x - 1) / y);
 }
 
+__constant__ float const_kmem[16384];       // 2 ^ 14
+
 __global__ void conv_forward_kernel(float *y, const float *x, const float *k, const int B, const int M, const int C, const int H, const int W, const int K)
 {
     /*
@@ -35,7 +37,7 @@ __global__ void conv_forward_kernel(float *y, const float *x, const float *k, co
 
 #define y4d(i3, i2, i1, i0) y[(i3) * (M * H_out * W_out) + (i2) * (H_out * W_out) + (i1) * (W_out) + i0]
 #define x4d(i3, i2, i1, i0) x[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
-#define k4d(i3, i2, i1, i0) k[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
+#define k4d(i3, i2, i1, i0) const_kmem[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
 #define k2d(i1, i0) k_shared[(i1) * K + (i0)]
 #define x2d(i1, i0) x_shared[(i1) * W_x + (i0)]
 
@@ -117,7 +119,7 @@ __host__ void GPUInterface::conv_forward_gpu(float *host_y, const float *host_x,
   checkError();
 
   cudaMemcpy(device_x, host_x, size_x, cudaMemcpyHostToDevice);
-  cudaMemcpy(device_k, host_k, size_k, cudaMemcpyHostToDevice);
+  cudaMemcpyToSymbol(const_kmem, host_k, size_k);
   checkError();
 
   // Set the kernel dimensions and call the kernel
