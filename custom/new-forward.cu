@@ -8,7 +8,7 @@ __host__ __device__ size_t ceilDiv(size_t x, size_t y) {
 
 __constant__ float const_kmem[16384];       // 2 ^ 14
 
-__global__ void conv_forward_kernel(float *y, const float *x, const float *k, const int B, const int M, const int C, const int H, const int W, const int K)
+__global__ void conv_forward_kernel(float * __restrict__ y, const float * __restrict__ x, const float * __restrict__ k, const int B, const int M, const int C, const int H, const int W, const int K)
 {
     /*
     Modify this function to implement the forward pass described in Chapter 16.
@@ -66,14 +66,22 @@ __global__ void conv_forward_kernel(float *y, const float *x, const float *k, co
         k2d(h_thread, w_thread) = k4d(m, c, h_thread, w_thread);
 
       // Load slice of x for b, c
-      for (size_t i = h_thread; i < H_x; i += blockDim.y)
-        for (size_t j = w_thread; j < W_x; j += blockDim.x)
+      for (size_t i = h_thread; i < H_x; i += blockDim.y){
+        for (size_t j = w_thread; j < W_x; j += blockDim.x){
           x2d(i, j) = x4d(b, c, h_base + i, w_base + j);
+        }
+      }
 
       __syncthreads();
-      for (size_t p = 0; p < K; ++p) { 
-        for (size_t q = 0; q < K; ++q) {
+      for (size_t p = 0; p < K; p+=2) { 
+        for (size_t q = 0; q < K; q+=2) {
           res += x2d(h_thread + p, w_thread + q) * k2d(p, q);
+          if (p+1 < K)
+            res += x2d(h_thread + p+1, w_thread + q) * k2d(p+1, q);
+          if (q+1 < K)
+            res += x2d(h_thread + p, w_thread + q+1) * k2d(p, q+1);
+          if (p+1 < K && q+1 < K)
+            res += x2d(h_thread + p+1, w_thread + q+1) * k2d(p+1, q+1);
         }
       }
     }
