@@ -16,9 +16,8 @@ commands:
       - /bin/bash -c "cp -rv /src/custom/* /ece408/project/src/layer/custom" # copy custom layers to mini-dnn file tree
       - /bin/bash -c "cmake /ece408/project/ && make -j8"
       # You may modify the commands below. Uncomment/Comment lines based on the milestone
-      # - /bin/bash -c "time ./m2 10000"
-      # - /bin/bash -c "./m3"
-      # - /bin/bash -c "nsys profile --stats=true ./m3"
-      # - /bin/bash -c 'nv-nsight-cu-cli --section ".*" -o analysis_file ./m3'
+      # - /bin/bash -c "time ./m4 10000"
       - /bin/bash -c "./m4"
+      # - /bin/bash -c "nsys profile --stats=true ./m4"
+      # - /bin/bash -c 'nv-nsight-cu-cli --section ".*" -o analysis_file ./m4'
       #- /bin/bash -c "./final"
