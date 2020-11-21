@@ -2,11 +2,11 @@
 #include <iostream>
 #include "gpu-new-forward.h"
 
-#define TILE_SIZE 32
-
 __host__ __device__ size_t ceilDiv(size_t x, size_t y) {
   return 1 + ((x - 1) / y);
 }
+
+__constant__ float const_kmem[16384];       // 2 ^ 14
 
 __global__ void conv_forward_kernel(float *y, const float *x, const float *k, const int B, const int M, const int C, const int H, const int W, const int K)
 {
@@ -37,18 +37,18 @@ __global__ void conv_forward_kernel(float *y, const float *x, const float *k, co
 
 #define y4d(i3, i2, i1, i0) y[(i3) * (M * H_out * W_out) + (i2) * (H_out * W_out) + (i1) * (W_out) + i0]
 #define x4d(i3, i2, i1, i0) x[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
-#define k4d(i3, i2, i1, i0) k[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
+#define k4d(i3, i2, i1, i0) const_kmem[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
 #define k2d(i1, i0) k_shared[(i1) * K + (i0)]
 #define x2d(i1, i0) x_shared[(i1) * W_x + (i0)]
 
     // Insert your GPU convolution kernel code here
     const size_t b = blockIdx.x;
     const size_t m = blockIdx.y;
-    const size_t W_grid = ceilDiv(W_out, TILE_SIZE);
-    const size_t W_x = TILE_SIZE + K - 1;
-    const size_t H_x = TILE_SIZE + K - 1;
-    const size_t h_base = TILE_SIZE * (blockIdx.z / W_grid);
-    const size_t w_base = TILE_SIZE * (blockIdx.z % W_grid);
+    const size_t W_grid = ceilDiv(W_out, blockDim.x);
+    const size_t W_x = blockDim.x + K - 1;
+    const size_t H_x = blockDim.y + K - 1;
+    const size_t h_base = blockDim.y * (blockIdx.z / W_grid);
+    const size_t w_base = blockDim.x * (blockIdx.z % W_grid);
     const size_t h_thread = threadIdx.y;
     const size_t w_thread = threadIdx.x;
     const size_t h = h_base + h_thread;
@@ -66,8 +66,8 @@ __global__ void conv_forward_kernel(float *y, const float *x, const float *k, co
         k2d(h_thread, w_thread) = k4d(m, c, h_thread, w_thread);
 
       // Load slice of x for b, c
-      for (size_t i = h_thread; i < H_x; i += TILE_SIZE)
-        for (size_t j = w_thread; j < W_x; j += TILE_SIZE)
+      for (size_t i = h_thread; i < H_x; i += blockDim.y)
+        for (size_t j = w_thread; j < W_x; j += blockDim.x)
           x2d(i, j) = x4d(b, c, h_base + i, w_base + j);
 
       __syncthreads();
@@ -116,14 +116,14 @@ __host__ void GPUInterface::conv_forward_gpu(float *host_y, const float *host_x,
   cudaMalloc(&device_y, size_y);
   cudaMalloc(&device_x, size_x);
   cudaMalloc(&device_k, size_k);
-  
+  checkError();
 
   cudaMemcpy(device_x, host_x, size_x, cudaMemcpyHostToDevice);
-  cudaMemcpy(device_k, host_k, size_k, cudaMemcpyHostToDevice);
-  
+  cudaMemcpyToSymbol(const_kmem, host_k, size_k);
+  checkError();
 
   // Set the kernel dimensions and call the kernel
-  const size_t W_block = TILE_SIZE;
+  const size_t W_block = 32;
   const size_t H_block = W_block; // square
   const size_t Z_grid = ceilDiv(W_out, W_block) * ceilDiv(H_out, H_block);
 
@@ -135,25 +135,25 @@ __host__ void GPUInterface::conv_forward_gpu(float *host_y, const float *host_x,
   const dim3 gridDim(B, M, Z_grid);
 
   conv_forward_kernel<<<gridDim, blockDim, size_shared>>>(device_y, device_x, device_k, B, M, C, H, W, K);
-  
+  checkError();
 
   // Copy the output back to host
   cudaMemcpy(host_y, device_y, size_y, cudaMemcpyDeviceToHost);
-  
+  checkError();
 
   // Free device memory
   cudaFree(device_y);
   cudaFree(device_x);
   cudaFree(device_k);
-  
+  checkError();
 
   // Useful snippet for error checking
-  cudaError_t error = cudaGetLastError();
-  if(error != cudaSuccess)
-  {
-      std::cout<<"CUDA error: "<<cudaGetErrorString(error)<<std::endl;
-      exit(-1);
-  }
+  // cudaError_t error = cudaGetLastError();
+  // if(error != cudaSuccess)
+  // {
+  //     std::cout<<"CUDA error: "<<cudaGetErrorString(error)<<std::endl;
+  //     exit(-1);
+  // }
 }
 
 __host__ void GPUInterface::get_device_properties()
