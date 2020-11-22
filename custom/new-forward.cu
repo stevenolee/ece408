@@ -73,15 +73,23 @@ __global__ void conv_forward_kernel(float * __restrict__ y, const float * __rest
       }
 
       __syncthreads();
-      for (size_t p = 0; p < K; p+=2) { 
-        for (size_t q = 0; q < K; q+=2) {
-          res += x2d(h_thread + p, w_thread + q) * k2d(p, q);
-          if (p+1 < K)
+      if (h < H_out && w < W_out) {
+        for (size_t p = 0; p < K-1; p+=2) { 
+          for (size_t q = 0; q < K-1; q+=2) {
+            res += x2d(h_thread + p, w_thread + q) * k2d(p, q);
             res += x2d(h_thread + p+1, w_thread + q) * k2d(p+1, q);
-          if (q+1 < K)
             res += x2d(h_thread + p, w_thread + q+1) * k2d(p, q+1);
-          if (p+1 < K && q+1 < K)
             res += x2d(h_thread + p+1, w_thread + q+1) * k2d(p+1, q+1);
+          }
+        }
+        if (K % 2 == 1) {
+          for (size_t i = 0; i < K - 1; i +=2) {
+            res += x2d(h_thread + i, w_thread + K - 1) * k2d(i, K - 1);
+            res += x2d(h_thread + i + 1, w_thread + K - 1) * k2d(i + 1, K - 1);
+            res += x2d(h_thread + K - 1, w_thread + i) * k2d(K - 1, i);
+            res += x2d(h_thread + K - 1, w_thread + i + 1) * k2d(K - 1, i + 1);
+          }
+          res += x2d(h_thread + K - 1, w_thread + K - 1) * k2d(K - 1, K - 1);
         }
       }
     }
