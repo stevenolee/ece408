@@ -2,6 +2,9 @@
 #include <iostream>
 #include "gpu-new-forward.h"
 
+// Define this to enable shared memory use
+// #define SHARED
+
 __host__ __device__ size_t ceilDiv(size_t x, size_t y) {
   return 1 + ((x - 1) / y);
 }
@@ -38,8 +41,11 @@ __global__ void conv_forward_kernel(float * __restrict__ y, const float * __rest
 #define y4d(i3, i2, i1, i0) y[(i3) * (M * H_out * W_out) + (i2) * (H_out * W_out) + (i1) * (W_out) + i0]
 #define x4d(i3, i2, i1, i0) x[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
 #define k4d(i3, i2, i1, i0) const_kmem[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
+
+#ifdef SHARED
 #define k2d(i1, i0) k_shared[(i1) * K + (i0)]
 #define x2d(i1, i0) x_shared[(i1) * W_x + (i0)]
+#endif
 
     // Insert your GPU convolution kernel code here
     const size_t b = blockIdx.x;
@@ -54,12 +60,15 @@ __global__ void conv_forward_kernel(float * __restrict__ y, const float * __rest
     const size_t h = h_base + h_thread;
     const size_t w = w_base + w_thread;
 
+#ifdef SHARED
     extern __shared__ float shared[];
     float *x_shared = &shared[0];
     float *k_shared = &shared[W_x * H_x];
+#endif
 
     float res = 0.0;
     for (size_t c = 0; c < C; ++c) {
+#ifdef SHARED
       // Load slice of kernel for m, c
       __syncthreads();
       if (h_thread < K && w_thread < K)
@@ -73,23 +82,43 @@ __global__ void conv_forward_kernel(float * __restrict__ y, const float * __rest
       }
 
       __syncthreads();
+#endif
+      
       if (h < H_out && w < W_out) {
         for (size_t p = 0; p < K-1; p+=2) { 
           for (size_t q = 0; q < K-1; q+=2) {
+#ifdef SHARED
             res += x2d(h_thread + p, w_thread + q) * k2d(p, q);
             res += x2d(h_thread + p+1, w_thread + q) * k2d(p+1, q);
             res += x2d(h_thread + p, w_thread + q+1) * k2d(p, q+1);
             res += x2d(h_thread + p+1, w_thread + q+1) * k2d(p+1, q+1);
+#else
+            res += x4d(b, c, h + p, w + q) * k4d(m, c, p, q);
+            res += x4d(b, c, h + p+1, w + q) * k4d(m, c, p+1, q);
+            res += x4d(b, c, h + p, w + q+1) * k4d(m, c, p, q+1);
+            res += x4d(b, c, h + p+1, w + q+1) * k4d(m, c, p+1, q+1);
+#endif
           }
         }
         if (K % 2 == 1) {
           for (size_t i = 0; i < K - 1; i +=2) {
+#ifdef SHARED
             res += x2d(h_thread + i, w_thread + K - 1) * k2d(i, K - 1);
             res += x2d(h_thread + i + 1, w_thread + K - 1) * k2d(i + 1, K - 1);
             res += x2d(h_thread + K - 1, w_thread + i) * k2d(K - 1, i);
             res += x2d(h_thread + K - 1, w_thread + i + 1) * k2d(K - 1, i + 1);
+#else
+            res += x4d(b, c, h + i, w + K - 1) * k4d(m, c, i, K - 1);
+            res += x4d(b, c, h + i + 1, w + K - 1) * k4d(m, c, i + 1, K - 1);
+            res += x4d(b, c, h + K - 1, w + i) * k4d(m, c, K - 1, i);
+            res += x4d(b, c, h + K - 1, w + i + 1) * k4d(m, c, K - 1, i + 1);
+#endif
           }
+#ifdef SHARED
           res += x2d(h_thread + K - 1, w_thread + K - 1) * k2d(K - 1, K - 1);
+#else
+          res += x4d(b, c, h + K - 1, w + K - 1) * k4d(m, c, K - 1, K - 1);
+#endif
         }
       }
     }
@@ -150,7 +179,11 @@ __host__ void GPUInterface::conv_forward_gpu(float *host_y, const float *host_x,
   const dim3 blockDim(W_block, H_block);
   const dim3 gridDim(B, M, Z_grid);
 
+#ifdef SHARED
   conv_forward_kernel<<<gridDim, blockDim, size_shared>>>(device_y, device_x, device_k, B, M, C, H, W, K);
+#else
+  conv_forward_kernel<<<gridDim, blockDim>>>(device_y, device_x, device_k, B, M, C, H, W, K);
+#endif
   checkError();
 
   // Copy the output back to host
